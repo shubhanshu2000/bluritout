@@ -1,1 +1,6 @@
 test_videos
+.venv
+engine/.venv
+
+BLURITOUT_ARCHITECTURE.md
+BLURITOUT_CONTEXT.md
