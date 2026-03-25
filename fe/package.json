@@ -8,11 +8,12 @@
   "author": "Shubhanshu",
   "scripts": {
     "dev:react": "vite",
-    "dev:electron": "electron .",
+    "dev:electron": "npm run transpile:electron && electron .",
+    "dev": "concurrently -k \"npm:dev:react\" \"npm:dev:electron\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "transpile:electron": "tsc --project src/electron/tsconfig.json",
+    "transpile:electron": "tsc --project src/electron/tsconfig.json && node -e \"require('fs').copyFileSync('src/electron/preload.cjs','dist-electron/preload.cjs')\"",
     "dist:win": "npm run transpile:electron && npm run build && electron-builder --win --x64",
     "dist:mac": "npm run transpile:electron && npm run build && electron-builder --mac --arm64",
     "dist:linux": "npm run transpile:electron && npm run build && electron-builder --linux --x64"
@@ -37,8 +38,10 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "concurrently": "^9.2.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "wait-on": "^8.0.5"
   }
 }

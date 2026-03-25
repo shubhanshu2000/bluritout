@@ -1,6 +1,9 @@
 test_videos
 .venv
 engine/.venv
+fe/node_modules
+fe/dist-react
+fe/dist-electron
 
 BLURITOUT_ARCHITECTURE.md
 BLURITOUT_CONTEXT.md
