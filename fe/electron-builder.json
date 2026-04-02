@@ -1,22 +1,26 @@
 {
-  "appId": "com.s.blurItOut",
+  "appId": "com.bluritout.app",
+  "productName": "BlurItOut",
   "files": ["dist-react", "dist-electron", "src/electron/preload.cjs"],
   "extraResources": [
     {
-      "from": "../engine",
+      "from": "../engine/dist/worker",
       "to": "engine",
-      "filter": ["worker.py", "yolov8n-license-plate.pt", "yolov8n.pt", "models/**/*"]
+      "filter": ["**/*"]
     }
   ],
-  "icon": "./winIcon.png",
+  "icon": "./build/icon",
   "mac": {
-    "target": "dmg"
+    "target": "dmg",
+    "icon": "./build/icon.icns"
   },
   "linux": {
     "target": "AppImage",
-    "category": "Utility"
+    "category": "Utility",
+    "icon": "./build/icon.png"
   },
   "win": {
-    "target": ["portable", "msi"]
+    "target": ["portable", "msi"],
+    "icon": "./build/icon.ico"
   }
 }

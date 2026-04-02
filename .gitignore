@@ -1,9 +1,15 @@
 test_videos
 .venv
+
 engine/.venv
+engine/__pycache__
+engine/worker.spec
+
 fe/node_modules
 fe/dist-react
 fe/dist-electron
 
+
 BLURITOUT_ARCHITECTURE.md
 BLURITOUT_CONTEXT.md
+tmp-config.json
