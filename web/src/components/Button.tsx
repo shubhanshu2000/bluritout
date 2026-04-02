@@ -1,6 +1,7 @@
 import type {
   AnchorHTMLAttributes,
   ButtonHTMLAttributes,
+  JSX,
   PropsWithChildren,
 } from "react";
 
@@ -49,9 +50,11 @@ function classesFor({
     .join(" ");
 }
 
+export function Button(props: LinkProps): JSX.Element;
+export function Button(props: NativeButtonProps): JSX.Element;
 export function Button(props: ButtonProps) {
-  if ("href" in props && props.href) {
-    const { children, className, size, variant, ...rest } = props;
+  if ("href" in props && typeof props.href === "string") {
+    const { children, className, size, variant, ...rest } = props as LinkProps;
 
     return (
       <a className={classesFor({ className, size, variant })} {...rest}>
@@ -60,12 +63,19 @@ export function Button(props: ButtonProps) {
     );
   }
 
-  const { children, className, size, variant, type = "button", ...rest } = props;
+  const {
+    children,
+    className,
+    size,
+    variant,
+    type = "button",
+    ...rest
+  } = props as NativeButtonProps;
 
   return (
     <button
       className={classesFor({ className, size, variant })}
-      type={type as "button" | "submit" | "reset" | undefined}
+      type={type}
       {...rest}
     >
       {children}
