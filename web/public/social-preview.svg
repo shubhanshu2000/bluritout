@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#0B0B0F" />
+  <rect x="58" y="58" width="1084" height="514" rx="36" fill="url(#a)" fill-opacity=".12" stroke="rgba(255,255,255,0.12)" />
+  <circle cx="962" cy="188" r="148" fill="#6366F1" fill-opacity=".28" />
+  <circle cx="1036" cy="122" r="96" fill="#38BDF8" fill-opacity=".18" />
+  <text x="100" y="180" fill="#C7D2FE" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="600" letter-spacing="4">BLURITOUT</text>
+  <text x="100" y="278" fill="white" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="700">Automatically Blur Faces</text>
+  <text x="100" y="356" fill="white" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="700">in Your Videos</text>
+  <text x="100" y="426" fill="#CBD5E1" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="500">
+    AI-powered local face and number plate blurring for creators.
+  </text>
+  <rect x="744" y="180" width="318" height="222" rx="28" fill="#020617" fill-opacity=".88" stroke="rgba(255,255,255,0.1)" />
+  <rect x="774" y="214" width="168" height="140" rx="22" fill="url(#b)" />
+  <rect x="964" y="214" width="68" height="38" rx="14" fill="#312E81" fill-opacity=".8" />
+  <rect x="964" y="268" width="68" height="38" rx="14" fill="#1E293B" />
+  <rect x="964" y="322" width="68" height="38" rx="14" fill="#1E293B" />
+  <circle cx="830" cy="258" r="34" fill="#67E8F9" fill-opacity=".24" stroke="#67E8F9" stroke-opacity=".7" />
+  <circle cx="893" cy="288" r="28" fill="#C7D2FE" fill-opacity=".2" stroke="#C7D2FE" stroke-opacity=".7" />
+  <rect x="806" y="320" width="84" height="22" rx="10" fill="#67E8F9" fill-opacity=".2" stroke="#67E8F9" stroke-opacity=".7" />
+  <defs>
+    <linearGradient id="a" x1="58" y1="58" x2="1142" y2="572" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1" />
+      <stop offset="1" stop-color="#38BDF8" />
+    </linearGradient>
+    <linearGradient id="b" x1="774" y1="214" x2="942" y2="354" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#334155" />
+      <stop offset="1" stop-color="#0F172A" />
+    </linearGradient>
+  </defs>
+</svg>

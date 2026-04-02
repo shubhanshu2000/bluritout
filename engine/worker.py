@@ -1,0 +1,848 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import uuid
+import warnings
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Callable, Iterable, Sequence
+
+import cv2
+import numpy as np
+from PIL import Image
+
+try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*You are using `torch\.load` with `weights_only=False`.*",
+    category=FutureWarning,
+)
+
+
+DEFAULT_DETECT_EVERY_N = 3
+DEFAULT_BLUR_KERNEL = (25, 25)
+DEFAULT_OUTPUT_SUFFIX = "_blurred"
+QUEUE_SIZE = 32
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
+
+
+@dataclass(slots=True)
+class JobConfig:
+    job_id: str
+    input_paths: list[str]
+    output_dir: str | None = None
+    blur_target: str = "both"
+    device: str = "cuda"
+    detection_interval: int = DEFAULT_DETECT_EVERY_N
+    export_quality: str = "near_source"
+    audio_mode: str = "preserve"
+    overwrite: bool = False
+    mode: str = "process"
+    analysis_output: str | None = None
+    preview_output: str | None = None
+    analysis_path: str | None = None
+    selection_mode: str = "blur_selected"
+    selected_track_ids: list[int] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "JobConfig":
+        input_paths = payload.get("input_paths")
+        if not input_paths:
+            raise ValueError("input_paths is required")
+        return cls(
+            job_id=str(payload.get("job_id") or uuid.uuid4()),
+            input_paths=[str(item) for item in input_paths],
+            output_dir=str(payload["output_dir"]) if payload.get("output_dir") else None,
+            blur_target=str(payload.get("blur_target", "both")),
+            device=str(payload.get("device", "cuda")),
+            detection_interval=max(1, int(payload.get("detection_interval", DEFAULT_DETECT_EVERY_N))),
+            export_quality=str(payload.get("export_quality", "near_source")),
+            audio_mode=str(payload.get("audio_mode", "preserve")),
+            overwrite=bool(payload.get("overwrite", False)),
+            mode=str(payload.get("mode", "process")),
+            analysis_output=str(payload["analysis_output"]) if payload.get("analysis_output") else None,
+            preview_output=str(payload["preview_output"]) if payload.get("preview_output") else None,
+            analysis_path=str(payload["analysis_path"]) if payload.get("analysis_path") else None,
+            selection_mode=str(payload.get("selection_mode", "blur_selected")),
+            selected_track_ids=[int(item) for item in payload.get("selected_track_ids", [])],
+        )
+
+
+@dataclass(slots=True)
+class SourceMediaInfo:
+    width: int
+    height: int
+    fps: float
+    total_frames: int
+    duration_seconds: float | None
+    has_audio: bool
+
+
+@dataclass(slots=True)
+class JobResult:
+    job_id: str
+    status: str
+    outputs: list[str] = field(default_factory=list)
+    elapsed_seconds: float = 0.0
+    device: str = "cpu"
+    requested_device: str = "cuda"
+    worker_python: str = sys.executable
+    audio_preserved: bool = False
+    source_has_audio: bool = False
+    error: str | None = None
+    analysis_path: str | None = None
+    preview_path: str | None = None
+    tracks: list[dict] = field(default_factory=list)
+    preview_tracks: list[int] = field(default_factory=list)
+
+
+def emit_event(event: dict) -> None:
+    print(json.dumps(event), flush=True)
+
+
+def load_config(path: str) -> JobConfig:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return JobConfig.from_dict(payload)
+
+
+def resolve_device(requested_device: str) -> str:
+    requested = requested_device.lower()
+    if requested not in {"auto", "cuda", "cpu"}:
+        raise ValueError(f"Unsupported device: {requested_device}")
+
+    cuda_available = bool(torch and torch.cuda.is_available())
+    if requested == "auto":
+        return "cuda" if cuda_available else "cpu"
+    if requested == "cuda" and not cuda_available:
+        return "cpu"
+    return requested
+
+
+def discover_inputs(input_paths: Sequence[str]) -> list[Path]:
+    discovered: list[Path] = []
+    for raw_path in input_paths:
+        path = Path(raw_path).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Input path does not exist: {path}")
+        if path.is_dir():
+            for file in sorted(path.iterdir()):
+                if file.is_file() and file.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+                    discovered.append(file)
+        elif path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+            discovered.append(path)
+    if not discovered:
+        raise ValueError("No supported video files were found in the provided input paths")
+    return discovered
+
+
+def output_path_for(source_path: Path, output_dir: str | None) -> Path:
+    destination_dir = Path(output_dir).expanduser().resolve() if output_dir else source_path.parent
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    return destination_dir / f"{source_path.stem}{DEFAULT_OUTPUT_SUFFIX}.mp4"
+
+
+def ffprobe_has_audio(input_path: Path) -> bool:
+    command = [
+        os.environ.get("BLURITOUT_FFPROBE", "ffprobe"),
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "json",
+        str(input_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool(payload.get("streams"))
+
+
+def build_ffmpeg_command(
+    intermediate_path: Path,
+    source_path: Path,
+    output_path: Path,
+    has_audio: bool,
+    export_quality: str,
+) -> list[str]:
+    crf = "18" if export_quality == "near_source" else "21"
+    command = [os.environ.get("BLURITOUT_FFMPEG", "ffmpeg"), "-y", "-i", str(intermediate_path)]
+    if has_audio:
+        command.extend(["-i", str(source_path)])
+    command.extend(["-map", "0:v:0"])
+    if has_audio:
+        command.extend(["-map", "1:a:0?"])
+    command.extend(
+        [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            crf,
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    )
+    if has_audio:
+        command.extend(["-c:a", "copy"])
+    command.extend(["-movflags", "+faststart", str(output_path)])
+    return command
+
+
+def mux_with_audio(
+    intermediate_path: Path,
+    source_path: Path,
+    output_path: Path,
+    has_audio: bool,
+    export_quality: str,
+) -> bool:
+    command = build_ffmpeg_command(intermediate_path, source_path, output_path, has_audio, export_quality)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return has_audio
+    if has_audio:
+        fallback = build_ffmpeg_command(intermediate_path, source_path, output_path, False, export_quality)
+        fallback_result = subprocess.run(fallback, capture_output=True, text=True, check=False)
+        if fallback_result.returncode == 0:
+            return False
+    raise RuntimeError(result.stderr.strip() or "ffmpeg muxing failed")
+
+
+class ModelRegistry:
+    def __init__(self, device: str, blur_target: str):
+        self.device = device
+        self.blur_target = blur_target
+        self.face_detector = None
+        self.face_cascade = None
+        self.plate_model = None
+
+    def load(self) -> None:
+        if self.blur_target in {"faces", "both"}:
+            try:
+                from facenet_pytorch import MTCNN
+
+                self.face_detector = MTCNN(keep_all=True, device=self.device)
+            except ImportError:
+                cascade_path = Path(__file__).resolve().parent / "models" / "haarcascade_frontalface_default.xml"
+                self.face_cascade = cv2.CascadeClassifier(str(cascade_path))
+                if self.face_cascade.empty():
+                    raise RuntimeError(f"Could not load fallback face cascade from {cascade_path}")
+        if self.blur_target in {"plates", "both"}:
+            from ultralytics import YOLO
+
+            model_path = Path(__file__).resolve().parent / "yolov8n-license-plate.pt"
+            self.plate_model = YOLO(str(model_path))
+            self.plate_model.to(self.device)
+            if self.device == "cuda" and torch is not None:
+                dummy = torch.zeros(1, 3, 640, 640, device=self.device)
+                self.plate_model(dummy, verbose=False)
+
+    def detect_objects(self, frame) -> list[dict]:
+        detections: list[dict] = []
+        if self.face_detector is not None:
+            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            boxes, probabilities = self.face_detector.detect(pil_image)
+            if boxes is not None:
+                probability_list = probabilities.tolist() if hasattr(probabilities, "tolist") else (probabilities or [])
+                for box, probability in zip(boxes, probability_list):
+                    if probability is None:
+                        continue
+                    x1, y1, x2, y2 = map(int, box)
+                    detections.append(
+                        {
+                            "box": [max(0, x1), max(0, y1), max(0, x2), max(0, y2)],
+                            "confidence": float(probability),
+                            "object_type": "face",
+                        }
+                    )
+        elif self.face_cascade is not None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            boxes = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            for x, y, width, height in boxes:
+                detections.append(
+                    {
+                        "box": [int(x), int(y), int(x + width), int(y + height)],
+                        "confidence": 0.85,
+                        "object_type": "face",
+                    }
+                )
+
+        if self.plate_model is not None:
+            results = self.plate_model(frame, verbose=False, imgsz=640, half=self.device == "cuda")
+            for result in results:
+                for box in result.boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    detections.append(
+                        {
+                            "box": [x1, y1, x2, y2],
+                            "confidence": float(box.conf[0]) if box.conf is not None else 0.0,
+                            "object_type": "plate",
+                        }
+                    )
+        return detections
+
+
+def create_tracker(device: str):
+    from deep_sort_realtime.deepsort_tracker import DeepSort
+
+    return DeepSort(
+        max_age=45,
+        n_init=2,
+        embedder="mobilenet",
+        embedder_gpu=device == "cuda",
+        half=device == "cuda",
+        bgr=True,
+    )
+
+
+def reader_thread(cap: cv2.VideoCapture, frame_queue: queue.Queue) -> None:
+    while True:
+        ret, frame = cap.read()
+        frame_queue.put((ret, frame))
+        if not ret:
+            break
+
+
+def blur_regions(frame, boxes: Iterable[tuple[int, int, int, int]]) -> None:
+    for x1, y1, x2, y2 in boxes:
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+        region = frame[y1:y2, x1:x2]
+        if region.size > 0:
+            frame[y1:y2, x1:x2] = cv2.GaussianBlur(region, DEFAULT_BLUR_KERNEL, 0)
+
+
+def open_video(path: Path) -> tuple[cv2.VideoCapture, SourceMediaInfo]:
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    duration = (total_frames / fps) if fps > 0 and total_frames > 0 else None
+    info = SourceMediaInfo(
+        width=width,
+        height=height,
+        fps=fps,
+        total_frames=total_frames,
+        duration_seconds=duration,
+        has_audio=ffprobe_has_audio(path),
+    )
+    return cap, info
+
+
+def write_preview(preview_frame, preview_objects: list[dict], track_labels: dict[int, str], preview_output: Path) -> None:
+    annotated = preview_frame.copy()
+    for item in preview_objects:
+        x1, y1, x2, y2 = item["box"]
+        track_id = item["track_id"]
+        label = track_labels.get(track_id, str(track_id))
+        color = (93, 218, 255) if item["object_type"] == "face" else (109, 255, 136)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(24, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+    preview_output.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(preview_output), annotated)
+
+
+def analyze_video(
+    source_path: Path,
+    config: JobConfig,
+    device: str,
+    emit: Callable[[dict], None],
+) -> JobResult:
+    if not config.analysis_output or not config.preview_output:
+        raise ValueError("analysis_output and preview_output are required for analyze mode")
+
+    models = ModelRegistry(device=device, blur_target=config.blur_target)
+    models.load()
+    tracker = create_tracker(device)
+    cap, info = open_video(source_path)
+
+    track_labels: dict[int, str] = {}
+    track_summaries: dict[int, dict] = {}
+    frame_tracks: list[dict] = []
+    counters = {"face": 0, "plate": 0}
+
+    preview_frame = None
+    preview_objects: list[dict] = []
+    preview_count = -1
+
+    start_time = time.time()
+    frame_index = 0
+
+    emit(
+        {
+            "job_id": config.job_id,
+            "status": "analyzing",
+            "current_file": str(source_path),
+            "current_frame": 0,
+            "total_frames": info.total_frames,
+            "device": device,
+            "requested_device": config.device,
+            "worker_python": sys.executable,
+            "message": "Detecting and tracking objects",
+        }
+    )
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            detections = models.detect_objects(frame)
+            tracker_inputs = []
+            for detection in detections:
+                x1, y1, x2, y2 = detection["box"]
+                tracker_inputs.append(([x1, y1, max(1, x2 - x1), max(1, y2 - y1)], detection["confidence"], detection["object_type"]))
+
+            tracks = tracker.update_tracks(tracker_inputs, frame=frame)
+            confirmed_objects: list[dict] = []
+
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+
+                x1, y1, x2, y2 = map(int, track.to_ltrb())
+                track_id = int(track.track_id)
+                det_class = track.det_class
+                if isinstance(det_class, np.ndarray):
+                    if det_class.size == 0:
+                        object_type = "face"
+                    else:
+                        object_type = str(det_class.reshape(-1)[0])
+                elif det_class in (None, ""):
+                    object_type = "face"
+                else:
+                    object_type = str(det_class)
+
+                if track_id not in track_labels:
+                    counters[object_type] = counters.get(object_type, 0) + 1
+                    prefix = "Person" if object_type == "face" else "Plate"
+                    track_labels[track_id] = f"{prefix} {counters[object_type]}"
+                    track_summaries[track_id] = {
+                        "track_id": track_id,
+                        "object_type": object_type,
+                        "label": track_labels[track_id],
+                        "first_seen_frame": frame_index,
+                        "last_seen_frame": frame_index,
+                        "frames_seen": 0,
+                        "representative_box": [x1, y1, x2, y2],
+                    }
+
+                summary = track_summaries[track_id]
+                summary["last_seen_frame"] = frame_index
+                summary["frames_seen"] += 1
+
+                current_area = max(1, (x2 - x1) * (y2 - y1))
+                rep_box = summary["representative_box"]
+                rep_area = max(1, (rep_box[2] - rep_box[0]) * (rep_box[3] - rep_box[1]))
+                if current_area > rep_area:
+                    summary["representative_box"] = [x1, y1, x2, y2]
+
+                confirmed_objects.append(
+                    {
+                        "track_id": track_id,
+                        "object_type": object_type,
+                        "label": track_labels[track_id],
+                        "box": [x1, y1, x2, y2],
+                    }
+                )
+
+            frame_tracks.append({"frame": frame_index, "objects": confirmed_objects})
+
+            if len(confirmed_objects) > preview_count:
+                preview_count = len(confirmed_objects)
+                preview_frame = frame.copy()
+                preview_objects = [dict(item) for item in confirmed_objects]
+
+            if frame_index % 10 == 0 or frame_index == info.total_frames - 1:
+                emit(
+                    {
+                        "job_id": config.job_id,
+                        "status": "analyzing",
+                        "current_file": str(source_path),
+                        "current_frame": frame_index + 1,
+                        "total_frames": info.total_frames,
+                        "device": device,
+                        "requested_device": config.device,
+                        "worker_python": sys.executable,
+                        "message": "Detecting and tracking objects",
+                    }
+                )
+
+            frame_index += 1
+    finally:
+        cap.release()
+
+    preview_output = Path(config.preview_output).expanduser().resolve()
+    if preview_frame is None:
+        preview_frame = np.zeros((max(1, info.height or 720), max(1, info.width or 1280), 3), dtype=np.uint8)
+    write_preview(preview_frame, preview_objects, track_labels, preview_output)
+
+    analysis_output = Path(config.analysis_output).expanduser().resolve()
+    analysis_output.parent.mkdir(parents=True, exist_ok=True)
+    tracks_payload = [track_summaries[track_id] for track_id in sorted(track_summaries)]
+    analysis_payload = {
+        "input_path": str(source_path),
+        "width": info.width,
+        "height": info.height,
+        "fps": info.fps,
+        "total_frames": info.total_frames,
+        "source_has_audio": info.has_audio,
+        "tracks": tracks_payload,
+        "frames": frame_tracks,
+        "preview_tracks": [item["track_id"] for item in preview_objects],
+        "preview_path": str(preview_output),
+    }
+    analysis_output.write_text(json.dumps(analysis_payload, separators=(",", ":")), encoding="utf-8")
+
+    return JobResult(
+        job_id=config.job_id,
+        status="completed",
+        outputs=[],
+        elapsed_seconds=time.time() - start_time,
+        device=device,
+        requested_device=config.device,
+        worker_python=sys.executable,
+        source_has_audio=info.has_audio,
+        analysis_path=str(analysis_output),
+        preview_path=str(preview_output),
+        tracks=tracks_payload,
+        preview_tracks=analysis_payload["preview_tracks"],
+    )
+
+
+def render_detect_and_blur(
+    source_path: Path,
+    intermediate_path: Path,
+    models: ModelRegistry,
+    detection_interval: int,
+    emit: Callable[[dict], None],
+    event_base: dict,
+) -> tuple[int, SourceMediaInfo]:
+    cap, info = open_video(source_path)
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(intermediate_path), fourcc, info.fps, (info.width, info.height))
+    frame_queue: queue.Queue = queue.Queue(maxsize=QUEUE_SIZE)
+    reader = threading.Thread(target=reader_thread, args=(cap, frame_queue), daemon=True)
+    reader.start()
+
+    frame_count = 0
+    last_faces: list[tuple[int, int, int, int]] = []
+    last_plates: list[tuple[int, int, int, int]] = []
+
+    try:
+        while True:
+            ret, frame = frame_queue.get()
+            if not ret:
+                break
+
+            if frame_count % detection_interval == 0:
+                detections = models.detect_objects(frame)
+                last_faces = [tuple(item["box"]) for item in detections if item["object_type"] == "face"]
+                last_plates = [tuple(item["box"]) for item in detections if item["object_type"] == "plate"]
+
+            if models.blur_target in {"faces", "both"}:
+                blur_regions(frame, last_faces)
+            if models.blur_target in {"plates", "both"}:
+                blur_regions(frame, last_plates)
+
+            writer.write(frame)
+            frame_count += 1
+
+            if frame_count == 1 or frame_count % 30 == 0 or frame_count == info.total_frames:
+                emit(
+                    {
+                        **event_base,
+                        "status": "processing",
+                        "current_frame": frame_count,
+                        "total_frames": info.total_frames,
+                        "message": "Blurring sensitive regions",
+                    }
+                )
+    finally:
+        cap.release()
+        writer.release()
+
+    return frame_count, info
+
+
+def should_blur_track(track_id: int, selected_ids: set[int], selection_mode: str) -> bool:
+    if selection_mode == "keep_selected":
+        return track_id not in selected_ids
+    return track_id in selected_ids
+
+
+def render_selective_blur(
+    source_path: Path,
+    intermediate_path: Path,
+    analysis_path: Path,
+    selected_track_ids: set[int],
+    selection_mode: str,
+    emit: Callable[[dict], None],
+    event_base: dict,
+) -> tuple[int, SourceMediaInfo]:
+    analysis_payload = json.loads(analysis_path.read_text(encoding="utf-8"))
+    frame_lookup = {int(item["frame"]): item["objects"] for item in analysis_payload["frames"]}
+
+    cap, info = open_video(source_path)
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(intermediate_path), fourcc, info.fps, (info.width, info.height))
+    frame_queue: queue.Queue = queue.Queue(maxsize=QUEUE_SIZE)
+    reader = threading.Thread(target=reader_thread, args=(cap, frame_queue), daemon=True)
+    reader.start()
+
+    frame_index = 0
+
+    try:
+        while True:
+            ret, frame = frame_queue.get()
+            if not ret:
+                break
+
+            objects = frame_lookup.get(frame_index, [])
+            boxes_to_blur = []
+            for item in objects:
+                track_id = int(item["track_id"])
+                if should_blur_track(track_id, selected_track_ids, selection_mode):
+                    boxes_to_blur.append(tuple(item["box"]))
+
+            blur_regions(frame, boxes_to_blur)
+            writer.write(frame)
+            frame_index += 1
+
+            if frame_index == 1 or frame_index % 30 == 0 or frame_index == info.total_frames:
+                emit(
+                    {
+                        **event_base,
+                        "status": "processing",
+                        "current_frame": frame_index,
+                        "total_frames": info.total_frames,
+                        "message": "Applying selective blur from tracked IDs",
+                    }
+                )
+    finally:
+        cap.release()
+        writer.release()
+
+    return frame_index, info
+
+
+def process_file(
+    source_path: Path,
+    config: JobConfig,
+    file_index: int,
+    total_files: int,
+    models: ModelRegistry | None,
+    emit: Callable[[dict], None],
+    device: str,
+) -> dict:
+    output_path = output_path_for(source_path, config.output_dir)
+    if output_path.exists() and not config.overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}")
+
+    event_base = {
+        "job_id": config.job_id,
+        "current_file": str(source_path),
+        "files_completed": file_index,
+        "files_total": total_files,
+        "device": device,
+        "requested_device": config.device,
+        "worker_python": sys.executable,
+    }
+    emit({**event_base, "status": "preparing", "message": "Preparing media metadata"})
+
+    started_at = time.time()
+    with tempfile.TemporaryDirectory(prefix="bluritout-") as temp_dir:
+        intermediate_path = Path(temp_dir) / f"{source_path.stem}_intermediate.avi"
+
+        if config.analysis_path:
+            frame_count, info = render_selective_blur(
+                source_path=source_path,
+                intermediate_path=intermediate_path,
+                analysis_path=Path(config.analysis_path).expanduser().resolve(),
+                selected_track_ids=set(config.selected_track_ids),
+                selection_mode=config.selection_mode,
+                emit=emit,
+                event_base=event_base,
+            )
+        else:
+            if models is None:
+                raise RuntimeError("Model registry is required for class-based processing")
+            frame_count, info = render_detect_and_blur(
+                source_path=source_path,
+                intermediate_path=intermediate_path,
+                models=models,
+                detection_interval=config.detection_interval,
+                emit=emit,
+                event_base=event_base,
+            )
+
+        emit({**event_base, "status": "muxing", "message": "Restoring audio and finalizing export"})
+        audio_preserved = mux_with_audio(
+            intermediate_path=intermediate_path,
+            source_path=source_path,
+            output_path=output_path,
+            has_audio=info.has_audio and config.audio_mode == "preserve",
+            export_quality=config.export_quality,
+        )
+
+    return {
+        "input_path": str(source_path),
+        "output_path": str(output_path),
+        "frame_count": frame_count,
+        "total_frames": info.total_frames,
+        "source_has_audio": info.has_audio,
+        "audio_preserved": audio_preserved,
+        "elapsed_seconds": time.time() - started_at,
+    }
+
+
+def process_job(config: JobConfig, emit: Callable[[dict], None] = emit_event) -> JobResult:
+    started_at = time.time()
+    source_files = discover_inputs(config.input_paths)
+    resolved_device = resolve_device(config.device)
+
+    if config.mode == "analyze":
+        if len(source_files) != 1:
+            raise ValueError("Analyze mode currently supports exactly one input video")
+        return analyze_video(source_files[0], config, resolved_device, emit)
+
+    models = None
+    if not config.analysis_path:
+        models = ModelRegistry(device=resolved_device, blur_target=config.blur_target)
+        models.load()
+
+    emit(
+        {
+            "job_id": config.job_id,
+            "status": "queued",
+            "files_total": len(source_files),
+            "device": resolved_device,
+            "requested_device": config.device,
+            "worker_python": sys.executable,
+            "message": "Job accepted",
+        }
+    )
+
+    outputs: list[str] = []
+    source_has_audio = False
+    audio_preserved = True
+
+    for index, source_path in enumerate(source_files):
+        try:
+            result = process_file(source_path, config, index, len(source_files), models, emit, resolved_device)
+        except Exception as exc:
+            return JobResult(
+                job_id=config.job_id,
+                status="failed",
+                outputs=outputs,
+                elapsed_seconds=time.time() - started_at,
+                device=resolved_device,
+                requested_device=config.device,
+                worker_python=sys.executable,
+                audio_preserved=audio_preserved,
+                source_has_audio=source_has_audio,
+                error=f"{exc}\n{traceback.format_exc()}",
+            )
+
+        outputs.append(result["output_path"])
+        source_has_audio = source_has_audio or result["source_has_audio"]
+        audio_preserved = audio_preserved and (not result["source_has_audio"] or result["audio_preserved"])
+        emit(
+            {
+                "job_id": config.job_id,
+                "status": "file_completed",
+                "current_file": result["input_path"],
+                "files_completed": index + 1,
+                "files_total": len(source_files),
+                "output_path": result["output_path"],
+                "elapsed_seconds": result["elapsed_seconds"],
+                "device": resolved_device,
+                "requested_device": config.device,
+                "worker_python": sys.executable,
+                "audio_preserved": result["audio_preserved"],
+                "source_has_audio": result["source_has_audio"],
+                "message": "Finished processing file",
+            }
+        )
+
+    return JobResult(
+        job_id=config.job_id,
+        status="completed",
+        outputs=outputs,
+        elapsed_seconds=time.time() - started_at,
+        device=resolved_device,
+        requested_device=config.device,
+        worker_python=sys.executable,
+        audio_preserved=audio_preserved,
+        source_has_audio=source_has_audio,
+    )
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="BlurItOut local worker")
+    parser.add_argument("--config", required=True, help="Path to a JSON config file")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    try:
+        config = load_config(args.config)
+        result = process_job(config)
+    except Exception as exc:
+        emit_event(
+            {
+                "job_id": "unknown",
+                "status": "failed",
+                "outputs": [],
+                "elapsed_seconds": 0.0,
+                "device": "cpu",
+                "requested_device": "cuda",
+                "worker_python": sys.executable,
+                "audio_preserved": False,
+                "source_has_audio": False,
+                "error": f"{exc}\n{traceback.format_exc()}",
+            }
+        )
+        return 1
+
+    emit_event(asdict(result))
+    return 0 if result.status == "completed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
