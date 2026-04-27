@@ -134,7 +134,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+      GH_REPO: ${{ github.repository }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
@@ -158,10 +164,10 @@ jobs:
 
       - name: Publish or update release
         run: |
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease=false --latest
+          if gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --repo "$GH_REPO" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease=false --latest
           else
-            gh release create "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --latest
+            gh release create "$TAG_NAME" --repo "$GH_REPO" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --latest
           fi
 
-          gh release upload "$TAG_NAME" release-assets/* --clobber
+          gh release upload "$TAG_NAME" release-assets/* --repo "$GH_REPO" --clobber
