@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from engine.worker import build_ffmpeg_command, discover_inputs, output_path_for, resolve_device
+import numpy as np
+
+from engine.worker import build_ffmpeg_command, blur_regions, discover_inputs, output_path_for, resolve_device
 
 
 def test_discover_inputs_includes_supported_files(tmp_path: Path):
@@ -39,3 +41,15 @@ def test_build_ffmpeg_command_includes_audio_mapping(tmp_path: Path):
     assert "1:a:0?" in command
     assert "libx264" in command
     assert str(output) == command[-1]
+
+
+def test_blur_regions_expands_and_strongly_anonymizes_box():
+    yy, xx = np.indices((120, 120), dtype=np.uint8)
+    frame = np.dstack((xx, yy, (xx * 3 + yy * 2).astype(np.uint8))).copy()
+    before = frame.copy()
+
+    blur_regions(frame, [(40, 40, 80, 80)])
+
+    assert np.any(frame[50:70, 50:70] != before[50:70, 50:70])
+    assert np.any(frame[34:39, 50:70] != before[34:39, 50:70])
+    assert np.array_equal(frame[0:20, 0:20], before[0:20, 0:20])

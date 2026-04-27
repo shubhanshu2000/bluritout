@@ -1,0 +1,19 @@
+{
+  "videos": [
+    {
+      "id": "joshivlog",
+      "input_path": "../test_videos/joshivlog.mp4",
+      "notes": "Primary face-identity regression sample."
+    },
+    {
+      "id": "deepranjanvlog",
+      "input_path": "../test_videos/deepranjanvlog.mp4",
+      "notes": "Longer vlog sample for duplicate-face and plate checks."
+    },
+    {
+      "id": "sample",
+      "input_path": "../test_videos/sample.mp4",
+      "notes": "General desktop sanity sample."
+    }
+  ]
+}

@@ -4,6 +4,7 @@
     "target": "esnext",
     "module": "nodenext",
     "outDir": "../../dist-electron",
+    "rootDir": ".",
     "skipLibCheck": true
   }
 }
