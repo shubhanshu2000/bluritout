@@ -20,6 +20,7 @@ const specName =
     ? process.argv[specArgIndex + 1]
     : process.env.BLURITOUT_WORKER_SPEC || "worker.spec";
 const specPath = join(engineDir, specName);
+const releasePlateModelPath = join(engineDir, "yolov8n-license-plate.onnx");
 
 const pythonCandidates =
   process.platform === "win32"
@@ -39,6 +40,13 @@ if (!python) {
 
 if (!existsSync(specPath)) {
   console.error(`Could not find PyInstaller spec: ${specPath}`);
+  process.exit(1);
+}
+
+if (specName === "worker.release.spec" && !existsSync(releasePlateModelPath)) {
+  console.error(
+    `Release worker build requires ${releasePlateModelPath}. Commit that ONNX model or the packaged app will not support plate detection.`,
+  );
   process.exit(1);
 }
 
