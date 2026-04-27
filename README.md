@@ -67,6 +67,8 @@ The `Desktop Release` workflow uses the smaller release worker profile and publi
 
 The website download buttons use GitHub's `releases/latest/download` URLs, so the links keep pointing to the latest published release assets. The default repository is `shubhanshu2000/blurItOut`; if the repository changes, set `VITE_GITHUB_REPOSITORY=owner/repo` when building the website.
 
+The release used by the website must be a normal published GitHub Release, not a draft or prerelease. GitHub's `releases/latest/download` redirect does not target draft releases and can skip prereleases.
+
 macOS builds are currently unsigned beta DMGs. Users may see Gatekeeper warnings until Apple code signing and notarization are configured.
 
 ## Release Checklist

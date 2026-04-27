@@ -145,9 +145,9 @@ jobs:
       - name: Publish or update release
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease
+            gh release edit "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease=false --latest
           else
-            gh release create "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease
+            gh release create "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --latest
           fi
 
           gh release upload "$TAG_NAME" release-assets/* --clobber
