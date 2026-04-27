@@ -1,0 +1,153 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to publish, for example v1.0.0-beta.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref_name || inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            runner: windows-latest
+            package_script: dist:win:release
+            output_glob: "dist/*.zip"
+            asset_name: "BlurItOut-windows-x64.zip"
+          - label: macos-arm64
+            runner: macos-14
+            package_script: dist:mac:release
+            output_glob: "dist/*.dmg"
+            asset_name: "BlurItOut-macos-arm64.dmg"
+          - label: linux-x64
+            runner: ubuntu-latest
+            package_script: dist:linux:release
+            output_glob: "dist/*.AppImage"
+            asset_name: "BlurItOut-linux-x64.AppImage"
+
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: fe/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install frontend dependencies
+        working-directory: fe
+        run: npm ci
+
+      - name: Create engine virtualenv
+        run: python -m venv engine/.venv
+
+      - name: Install engine dependencies
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            PYTHON="engine/.venv/Scripts/python.exe"
+          else
+            PYTHON="engine/.venv/bin/python"
+          fi
+
+          "$PYTHON" -m pip install --upgrade pip setuptools wheel
+
+          "$PYTHON" -m pip install -r engine/requirements-release.txt
+          "$PYTHON" -m pip install pyinstaller
+
+      - name: Build desktop package
+        working-directory: fe
+        run: npm run ${{ matrix.package_script }}
+
+      - name: Normalize release asset
+        working-directory: fe
+        run: |
+          mkdir -p ../release-upload
+          mapfile -t matches < <(compgen -G "${{ matrix.output_glob }}" || true)
+          if [[ "${#matches[@]}" -eq 0 ]]; then
+            echo "No artifact matched ${{ matrix.output_glob }}"
+            find dist -maxdepth 2 -type f | sort || true
+            exit 1
+          fi
+          cp "${matches[0]}" "../release-upload/${{ matrix.asset_name }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: release-upload/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md <<EOF
+          # BlurItOut ${TAG_NAME}
+
+          Free beta release.
+
+          BlurItOut is currently in beta. Detection and blur quality may vary depending on video quality, lighting, motion, face angle, and license plate visibility. Always review exported videos before publishing or sharing them.
+
+          Downloads:
+          - Windows x64: BlurItOut-windows-x64.zip
+          - macOS arm64: BlurItOut-macos-arm64.dmg
+          - Linux x64: BlurItOut-linux-x64.AppImage
+          EOF
+
+      - name: Publish or update release
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease
+          else
+            gh release create "$TAG_NAME" --title "BlurItOut ${TAG_NAME}" --notes-file release-notes.md --prerelease
+          fi
+
+          gh release upload "$TAG_NAME" release-assets/* --clobber

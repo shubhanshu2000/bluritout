@@ -16,6 +16,24 @@ import {
   WorkflowIcon,
 } from "./components/icons";
 
+const githubRepository =
+  import.meta.env.VITE_GITHUB_REPOSITORY || "Shubhanshu/blurItOut";
+const releaseDownloadBase = `https://github.com/${githubRepository}/releases/latest/download`;
+const desktopDownloads = [
+  {
+    label: "Windows x64",
+    file: "BlurItOut-windows-x64.zip",
+  },
+  {
+    label: "macOS arm64",
+    file: "BlurItOut-macos-arm64.dmg",
+  },
+  {
+    label: "Linux x64",
+    file: "BlurItOut-linux-x64.AppImage",
+  },
+];
+
 const features = [
   {
     icon: <FaceIcon className="h-6 w-6" />,
@@ -70,7 +88,7 @@ const steps = [
 
 function App() {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.16),_transparent_32%),radial-gradient(circle_at_80%_20%,_rgba(56,189,248,0.12),_transparent_20%),linear-gradient(180deg,_#0b0b0f_0%,_#0f1118_100%)] text-white">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.16),transparent_32%),radial-gradient(circle_at_80%_20%,rgba(56,189,248,0.12),transparent_20%),linear-gradient(180deg,#0b0b0f_0%,#0f1118_100%)] text-white">
       <Navbar />
       <main>
         <Hero />
@@ -232,16 +250,16 @@ function App() {
                     Download BluritOut
                   </h2>
                   <p className="mt-4 max-w-2xl text-base leading-7 text-slate-200 sm:text-lg">
-                    Windows version available now. Install locally, process
+                    Free beta builds are published from GitHub Releases. Install locally, process
                     privately, and publish without exposing faces or number
                     plates you should not show.
                   </p>
                   <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-slate-200">
                     <span className="rounded-full border border-white/[0.12] bg-black/[0.15] px-4 py-2">
-                      Version v1.0.0
+                      Free beta
                     </span>
                     <span className="rounded-full border border-white/[0.12] bg-black/[0.15] px-4 py-2">
-                      Windows 10+
+                      Windows / macOS / Linux
                     </span>
                     <span className="rounded-full border border-white/[0.12] bg-black/[0.15] px-4 py-2">
                       Local processing
@@ -250,20 +268,24 @@ function App() {
                 </div>
 
                 <div className="flex flex-col items-start gap-4 lg:items-end">
-                  <Button
-                    href="/downloads/BluritOut-Setup-v1.0.0.exe"
-                    variant="primary"
-                    size="lg"
-                    download
-                  >
-                    <DownloadIcon className="h-5 w-5" />
-                    Download .exe
-                  </Button>
+                  <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
+                    {desktopDownloads.map((item, index) => (
+                      <Button
+                        key={item.file}
+                        href={`${releaseDownloadBase}/${item.file}`}
+                        variant={index === 0 ? "primary" : "secondary"}
+                        size="lg"
+                      >
+                        <DownloadIcon className="h-5 w-5" />
+                        {item.label}
+                      </Button>
+                    ))}
+                  </div>
                   <p className="max-w-xs text-sm leading-6 text-slate-300 lg:text-right">
-                    Installer target:
+                    Links always resolve to the latest GitHub Release assets:
                     <span className="font-medium text-white">
                       {" "}
-                      /public/downloads/BluritOut-Setup-v1.0.0.exe
+                      {githubRepository}
                     </span>
                   </p>
                 </div>

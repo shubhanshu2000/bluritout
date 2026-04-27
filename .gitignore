@@ -4,12 +4,26 @@ test_videos
 engine/.venv
 engine/__pycache__
 engine/worker.spec
+engine/build
+engine/dist
+engine/models/insightface-cache
+engine/models/paddlex-cache
+engine/*.onnx
+engine/*.pt
+engine/*.pth
 
 fe/node_modules
+fe/dist
 fe/dist-react
 fe/dist-electron
 
 
 BLURITOUT_ARCHITECTURE.md
 BLURITOUT_CONTEXT.md
+START_HERE_FOR_ANY_AI.md
+context/
 tmp-config.json
+tmp
+
+
+graphify-out
