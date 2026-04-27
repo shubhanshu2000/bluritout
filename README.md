@@ -65,7 +65,7 @@ The `Desktop Release` workflow uses the smaller release worker profile and publi
 - `BlurItOut-macos-arm64.dmg`
 - `BlurItOut-linux-x64.AppImage`
 
-The website download buttons use GitHub's `releases/latest/download` URLs, so the links keep pointing to the latest published release assets. If the repository is not `Shubhanshu/blurItOut`, set `VITE_GITHUB_REPOSITORY=owner/repo` when building the website.
+The website download buttons use GitHub's `releases/latest/download` URLs, so the links keep pointing to the latest published release assets. The default repository is `shubhanshu2000/blurItOut`; if the repository changes, set `VITE_GITHUB_REPOSITORY=owner/repo` when building the website.
 
 macOS builds are currently unsigned beta DMGs. Users may see Gatekeeper warnings until Apple code signing and notarization are configured.
 
