@@ -14,6 +14,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   group: desktop-release-${{ github.ref_name || inputs.tag_name }}
   cancel-in-progress: false
@@ -55,6 +58,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -96,13 +101,22 @@ jobs:
         working-directory: fe
         run: |
           mkdir -p ../release-upload
-          mapfile -t matches < <(compgen -G "${{ matrix.output_glob }}" || true)
-          if [[ "${#matches[@]}" -eq 0 ]]; then
-            echo "No artifact matched ${{ matrix.output_glob }}"
-            find dist -maxdepth 2 -type f | sort || true
-            exit 1
-          fi
-          cp "${matches[0]}" "../release-upload/${{ matrix.asset_name }}"
+          python - <<'PY'
+          from pathlib import Path
+          import glob
+          import shutil
+          import sys
+
+          matches = sorted(glob.glob("${{ matrix.output_glob }}"))
+          if not matches:
+              print("No artifact matched ${{ matrix.output_glob }}", file=sys.stderr)
+              for item in sorted(Path("dist").glob("**/*")):
+                  if item.is_file():
+                      print(item)
+              sys.exit(1)
+
+          shutil.copyfile(matches[0], Path("../release-upload") / "${{ matrix.asset_name }}")
+          PY
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

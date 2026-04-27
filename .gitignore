@@ -1,6 +1,10 @@
 test_videos
 .venv
 
+.claude/
+.codex/
+.cursor/
+
 engine/.venv
 engine/__pycache__
 engine/worker.spec
