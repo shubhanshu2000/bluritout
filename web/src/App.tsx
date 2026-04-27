@@ -17,7 +17,7 @@ import {
 } from "./components/icons";
 
 const githubRepository =
-  import.meta.env.VITE_GITHUB_REPOSITORY || "Shubhanshu/blurItOut";
+  import.meta.env.VITE_GITHUB_REPOSITORY || "shubhanshu2000/blurItOut";
 const releaseDownloadBase = `https://github.com/${githubRepository}/releases/latest/download`;
 const desktopDownloads = [
   {
