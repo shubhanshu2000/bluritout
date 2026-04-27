@@ -13,6 +13,7 @@ engine/dist
 engine/models/insightface-cache
 engine/models/paddlex-cache
 engine/*.onnx
+!engine/yolov8n-license-plate.onnx
 engine/*.pt
 engine/*.pth
 

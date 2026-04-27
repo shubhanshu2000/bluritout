@@ -33,6 +33,8 @@ function devFfmpegPaths(): { ffmpeg: string | null; ffprobe: string | null } {
 }
 import type { JobStatus, DeviceMode, JobRecord, TrackSummary, AnalysisRecord, JobSettings, AnalysisSettings, AnalysisStartPayload, ModelPolicy } from "../shared/types.js";
 
+app.setName("BlurItOut");
+
 const jobStoreName = "bluritout-jobs.json";
 const analysisStoreName = "bluritout-analyses.json";
 const workerLogRetentionDays = 14;
@@ -455,6 +457,7 @@ function patchAnalysis(analysisId: string, patch: Partial<AnalysisRecord>) {
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
+    title: "BlurItOut",
     width: 1440,
     height: 940,
     backgroundColor: "#10151d",
