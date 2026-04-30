@@ -48,7 +48,7 @@ cd .\fe
 npm run dist:win:release
 ```
 
-Current Windows distribution target is ZIP, not NSIS portable EXE. The release profile avoids bundling PyTorch/CUDA, PaddleOCR/Paddle, facenet-pytorch, and Ultralytics; it uses InsightFace ONNX models for faces, the ONNX plate detector backend for plates, and lightweight tracker embeddings.
+Current Windows distribution target is an NSIS installer EXE. The release profile avoids bundling PyTorch/CUDA, PaddleOCR/Paddle, facenet-pytorch, and Ultralytics; it uses InsightFace ONNX models for faces, the ONNX plate detector backend for plates, and lightweight tracker embeddings.
 
 ## Multi-OS Release Build
 
@@ -61,7 +61,7 @@ git push origin v1.0.0-beta.1
 
 The `Desktop Release` workflow uses the smaller release worker profile and publishes these stable asset names to the GitHub Release:
 
-- `BlurItOut-windows-x64.zip`
+- `BlurItOut-windows-x64-setup.exe`
 - `BlurItOut-macos-arm64.dmg`
 - `BlurItOut-linux-x64.AppImage`
 

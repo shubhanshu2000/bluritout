@@ -33,8 +33,8 @@ jobs:
           - label: windows-x64
             runner: windows-latest
             package_script: dist:win:release
-            output_glob: "dist/*.zip"
-            asset_name: "BlurItOut-windows-x64.zip"
+            output_glob: "dist/*.exe"
+            asset_name: "BlurItOut-windows-x64-setup.exe"
           - label: macos-arm64
             runner: macos-14
             package_script: dist:mac:release
@@ -157,7 +157,7 @@ jobs:
           BlurItOut is currently in beta. Detection and blur quality may vary depending on video quality, lighting, motion, face angle, and license plate visibility. Always review exported videos before publishing or sharing them.
 
           Downloads:
-          - Windows x64: BlurItOut-windows-x64.zip
+          - Windows x64 installer: BlurItOut-windows-x64-setup.exe
           - macOS arm64: BlurItOut-macos-arm64.dmg
           - Linux x64: BlurItOut-linux-x64.AppImage
           EOF
