@@ -1,6 +1,7 @@
 {
   "appId": "com.bluritout.app",
   "productName": "BlurItOut",
+  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
   "npmRebuild": false,
   "files": ["dist-react", "dist-electron", "src/electron/preload.cjs"],
   "extraResources": [
@@ -39,7 +40,12 @@
     ]
   },
   "win": {
-    "target": ["zip"],
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
     "extraResources": [
       {
         "from": "node_modules/ffmpeg-static/ffmpeg.exe",
@@ -50,5 +56,13 @@
         "to": "ffmpeg/ffprobe.exe"
       }
     ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "BlurItOut"
   }
 }

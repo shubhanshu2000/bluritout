@@ -21,8 +21,8 @@ const githubRepository =
 const releaseDownloadBase = `https://github.com/${githubRepository}/releases/latest/download`;
 const desktopDownloads = [
   {
-    label: "Windows x64",
-    file: "BlurItOut-windows-x64.zip",
+    label: "Windows x64 installer",
+    file: "BlurItOut-windows-x64-setup.exe",
   },
   {
     label: "macOS arm64",
